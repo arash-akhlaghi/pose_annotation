@@ -5,7 +5,7 @@ from rclpy.duration import Duration
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
 
 from std_msgs.msg import Header
-from sensor_msgs.msg import LaserScan, PointCloud2
+from sensor_msgs.msg import LaserScan, PointCloud2, PointField
 from laser_geometry import LaserProjection
 
 from tf2_ros import Buffer, TransformListener, TransformException
@@ -36,6 +36,10 @@ class Lidar3DFusion(Node):
         self.declare_parameter('queue_size', 10)
         self.declare_parameter('slop', 0.1)
         self.declare_parameter('publish_topic', '/merged_cloud')
+        # --- New parameters for intensity and scaling ---
+        self.declare_parameter('point_scale', 1.0)
+        self.declare_parameter('h_scan_intensity', 50.0)
+        self.declare_parameter('v_scan_intensity', 100.0)
 
         self.scan_topic = self.get_parameter('scan_topic').get_parameter_value().string_value
         self.vpoints_topic = self.get_parameter('vertical_points_topic').get_parameter_value().string_value
@@ -44,6 +48,10 @@ class Lidar3DFusion(Node):
         queue_size = int(self.get_parameter('queue_size').get_parameter_value().integer_value)
         slop = float(self.get_parameter('slop').get_parameter_value().double_value)
         publish_topic = self.get_parameter('publish_topic').get_parameter_value().string_value
+        # --- Get new parameters ---
+        self.point_scale = self.get_parameter('point_scale').get_parameter_value().double_value
+        self.h_intensity = self.get_parameter('h_scan_intensity').get_parameter_value().double_value
+        self.v_intensity = self.get_parameter('v_scan_intensity').get_parameter_value().double_value
 
         # QoS for sensor data
         self.sensor_qos = QoSProfile(
@@ -81,23 +89,28 @@ class Lidar3DFusion(Node):
             f"- vertical_points_topic: {self.vpoints_topic} (PointCloud2)\n"
             f"- target_frame: {self.target_frame}\n"
             f"- publish_topic: {publish_topic}\n"
-            f"- sync queue={queue_size} slop={slop}s"
+            f"- sync queue={queue_size} slop={slop}s\n"
+            f"- point_scale: {self.point_scale}\n"
+            f"- h_scan_intensity: {self.h_intensity}, v_scan_intensity: {self.v_intensity}"
         )
 
     def sync_cb(self, scan_msg: LaserScan, v_pc_msg: PointCloud2):
-        h_pc = self._scan_to_pointcloud(scan_msg)
-        h_pc_xyz = self._to_xyz32(h_pc)
+        # Convert LaserScan to PointCloud2 and add intensity
+        h_pc_raw = self._scan_to_pointcloud(scan_msg)
+        h_pc_with_intensity = self._add_intensity(h_pc_raw, self.h_intensity)
 
-        v_pc_xyz = self._to_xyz32(self._ensure_frame(v_pc_msg))
+        # Ensure vertical cloud has a frame_id and add intensity
+        v_pc_ensured = self._ensure_frame(v_pc_msg)
+        v_pc_with_intensity = self._add_intensity(v_pc_ensured, self.v_intensity)
 
         try:
-            h_pc_t = self._transform_cloud(h_pc_xyz, self.target_frame, h_pc_xyz.header.stamp)
-            v_pc_t = self._transform_cloud(v_pc_xyz, self.target_frame, v_pc_xyz.header.stamp)
+            h_pc_t = self._transform_cloud(h_pc_with_intensity, self.target_frame, h_pc_with_intensity.header.stamp)
+            v_pc_t = self._transform_cloud(v_pc_with_intensity, self.target_frame, v_pc_with_intensity.header.stamp)
         except TransformException as e:
             self.get_logger().warn(f"TF failed: {e}")
             return
 
-        merged = self._merge_pointclouds(h_pc_t, v_pc_t)
+        merged = self._merge_and_scale_pointclouds(h_pc_t, v_pc_t)
         self.pc_pub.publish(merged)
 
     def _scan_to_pointcloud(self, scan_msg: LaserScan) -> PointCloud2:
@@ -120,43 +133,61 @@ class Lidar3DFusion(Node):
             cloud.header.frame_id = self.vertical_frame_override
         return cloud
 
-    def _to_xyz32(self, cloud: PointCloud2) -> PointCloud2:
-        pts = list(pc2.read_points(cloud, field_names=("x", "y", "z"), skip_nans=True))
+    def _add_intensity(self, cloud: PointCloud2, intensity_val: float) -> PointCloud2:
+        """Reads an XYZ cloud and returns an XYZI cloud with a constant intensity."""
+        points_xyz = list(pc2.read_points(cloud, field_names=("x", "y", "z"), skip_nans=True))
+        
+        # Add the intensity value to each point
+        points_xyzi = [[p[0], p[1], p[2], intensity_val] for p in points_xyz]
+        
         header = Header()
         header.frame_id = cloud.header.frame_id
         header.stamp = cloud.header.stamp
-        return pc2.create_cloud_xyz32(header, pts)
+        
+        # Define the fields for an XYZI point cloud
+        fields = [
+            PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+            PointField(name='intensity', offset=12, datatype=PointField.FLOAT32, count=1),
+        ]
+        
+        return pc2.create_cloud(header, fields, points_xyzi)
 
     def _transform_cloud(self, cloud: PointCloud2, target_frame: str, stamp) -> PointCloud2:
         try:
-            # Wait up to 5 seconds for the transform at the message timestamp
             trans = self.tf_buffer.lookup_transform(
-                target_frame,
-                cloud.header.frame_id,
-                stamp,
-                timeout=Duration(seconds=5.0)
+                target_frame, cloud.header.frame_id, stamp, timeout=Duration(seconds=1.0)
             )
         except TransformException:
-            # If not available at that exact time, try the latest available
             trans = self.tf_buffer.lookup_transform(
-                target_frame,
-                cloud.header.frame_id,
-                rclpy.time.Time(),
-                timeout=Duration(seconds=5.0)
+                target_frame, cloud.header.frame_id, rclpy.time.Time(), timeout=Duration(seconds=1.0)
             )
         return do_transform_cloud(cloud, trans)
 
-    def _merge_pointclouds(self, a: PointCloud2, b: PointCloud2) -> PointCloud2:
-        pts_a = pc2.read_points(a, field_names=("x", "y", "z"), skip_nans=True)
-        pts_b = pc2.read_points(b, field_names=("x", "y", "z"), skip_nans=True)
+    def _merge_and_scale_pointclouds(self, a: PointCloud2, b: PointCloud2) -> PointCloud2:
+        """Merges two XYZI point clouds and applies a scaling factor."""
+        fields = ("x", "y", "z", "intensity")
+        pts_a = list(pc2.read_points(a, field_names=fields, skip_nans=True))
+        pts_b = list(pc2.read_points(b, field_names=fields, skip_nans=True))
 
-        merged_points = list(pts_a)
-        merged_points.extend(list(pts_b))
+        merged_points = pts_a
+        merged_points.extend(pts_b)
+
+        # Apply scaling if the factor is not 1.0
+        if self.point_scale != 1.0:
+            scaled_points = [
+                [p[0] * self.point_scale, p[1] * self.point_scale, p[2] * self.point_scale, p[3]]
+                for p in merged_points
+            ]
+        else:
+            scaled_points = merged_points
 
         header = Header()
         header.frame_id = self.target_frame
         header.stamp = _newer_stamp(a.header.stamp, b.header.stamp)
-        return pc2.create_cloud_xyz32(header, merged_points)
+        
+        return pc2.create_cloud(header, a.fields, scaled_points)
 
 
 def main(args=None):

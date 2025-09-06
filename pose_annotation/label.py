@@ -17,8 +17,9 @@ class ManualWorldToMapConverter(Node):
     """
     Transforms coordinates from a conceptual 'world' frame to the 'map' frame
     by using 'base_link' as an intermediate. It then publishes markers for visualization.
-    - Gates are shown as blue cubes.
-    - Robots are shown as red spheres with labels correctly placed above them.
+    - Gates are shown as larger blue cubes.
+    - Robot_1 (the reference) is shown only as a text label.
+    - Other robots are shown as red spheres with labels.
     """
     def __init__(self):
         super().__init__('manual_world_to_map_converter')
@@ -87,16 +88,16 @@ class ManualWorldToMapConverter(Node):
 
             # --- Add to PoseArray for debugging ---
             p = Pose()
-            p.position.x = point_in_map.point.x
-            p.position.y = point_in_map.point.y
-            p.position.z = point_in_map.point.z
+            p.position = point_in_map.point
             p.orientation.w = 1.0
             pose_array.poses.append(p)
 
             # --- Create Visualization Markers ---
             is_gate = (i < 10)
+            is_robot_1 = (i == 10)
+
             if is_gate:
-                # --- Create a CUBE marker for a GATE (no label) ---
+                # --- Create a CUBE marker for a GATE ---
                 marker = Marker()
                 marker.header.frame_id = "map"
                 marker.header.stamp = self.get_clock().now().to_msg()
@@ -106,19 +107,39 @@ class ManualWorldToMapConverter(Node):
                 marker.action = Marker.ADD
                 marker.pose.position = point_in_map.point
                 marker.pose.orientation.w = 1.0
-                marker.scale.x = 0.2
-                marker.scale.y = 0.2
-                marker.scale.z = 0.5
+                # --- Scale increased for larger cubes ---
+                marker.scale.x = 0.7
+                marker.scale.y = 0.7
+                marker.scale.z = 0.8
                 marker.color = ColorRGBA(r=0.2, g=0.5, b=1.0, a=0.8) # Blue
                 marker.lifetime = Duration(seconds=5).to_msg()
-                
                 marker_array.markers.append(marker)
                 marker_id += 1
-            else:
-                # --- Create a SPHERE and a TEXT marker for a ROBOT ---
+            elif is_robot_1:
+                # --- Create ONLY a TEXT marker for ROBOT 1 ---
+                label = f"robot_{i-9}"
+                text_marker = Marker()
+                text_marker.header.frame_id = "map"
+                text_marker.header.stamp = self.get_clock().now().to_msg()
+                text_marker.ns = "robot_labels"
+                text_marker.id = marker_id
+                text_marker.type = Marker.TEXT_VIEW_FACING
+                text_marker.action = Marker.ADD
+                text_marker.text = label
+                text_marker.pose.position.x = point_in_map.point.x
+                text_marker.pose.position.y = point_in_map.point.y
+                text_marker.pose.position.z = point_in_map.point.z + 0.4
+                text_marker.pose.orientation.w = 1.0
+                text_marker.scale.z = 0.3
+                text_marker.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0) # White
+                text_marker.lifetime = Duration(seconds=5).to_msg()
+                marker_array.markers.append(text_marker)
+                marker_id += 1
+            else: # This handles all other robots
+                # --- Create a SPHERE and a TEXT marker for OTHER ROBOTS ---
                 label = f"robot_{i-9}"
                 
-                # Sphere Marker (at ground level)
+                # Sphere Marker
                 sphere_marker = Marker()
                 sphere_marker.header.frame_id = "map"
                 sphere_marker.header.stamp = self.get_clock().now().to_msg()
@@ -136,7 +157,7 @@ class ManualWorldToMapConverter(Node):
                 marker_array.markers.append(sphere_marker)
                 marker_id += 1
 
-                # Text Label Marker (placed above the sphere)
+                # Text Label Marker
                 text_marker = Marker()
                 text_marker.header.frame_id = "map"
                 text_marker.header.stamp = self.get_clock().now().to_msg()
@@ -145,16 +166,11 @@ class ManualWorldToMapConverter(Node):
                 text_marker.type = Marker.TEXT_VIEW_FACING
                 text_marker.action = Marker.ADD
                 text_marker.text = label
-                
-                # ** THE FIX IS HERE **
-                # We now explicitly set the text's position to be above the sphere's position
-                # without modifying the sphere's position.
                 text_marker.pose.position.x = point_in_map.point.x
                 text_marker.pose.position.y = point_in_map.point.y
-                text_marker.pose.position.z = point_in_map.point.z + 0.4 # Position text above the sphere
-                
+                text_marker.pose.position.z = point_in_map.point.z + 0.4
                 text_marker.pose.orientation.w = 1.0
-                text_marker.scale.z = 0.3 # Text height
+                text_marker.scale.z = 0.3
                 text_marker.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0) # White
                 text_marker.lifetime = Duration(seconds=5).to_msg()
                 marker_array.markers.append(text_marker)
