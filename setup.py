@@ -26,7 +26,8 @@ setup(
             'image_publisher = pose_annotation.image_publisher:main',
             'pose_annotation_node = pose_annotation.pose_annotation_node:main',
             'transform = pose_annotation.transform:main',
-            'lidar_3d = pose_annotation.lidar_3d:main'
+            'lidar_3d = pose_annotation.lidar_3d:main',
+            'label = pose_annotation.label:main'
         ],
     },
 )
