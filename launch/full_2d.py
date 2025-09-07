@@ -15,6 +15,8 @@ def generate_launch_description():
     """
 
     # --- Paths to other ROS packages ---
+    # --- ADDED: Path to your pose_annotation package ---
+    pkg_pose_annotation = get_package_share_directory('pose_annotation')
     pkg_turtlebot3_gazebo = get_package_share_directory('turtlebot3_gazebo')
     pkg_slam_toolbox = get_package_share_directory('slam_toolbox')
     pkg_nav2_bringup = get_package_share_directory('nav2_bringup')
@@ -53,12 +55,14 @@ def generate_launch_description():
     )
 
     # --- Define Actions for the Sequential Custom Pipeline ---
-    gates_publisher_node = Node(
-        package='gates_position_publisher',
-        executable='gates_position_node',
-        name='gates_position_node',
-        output='screen'
+
+    # --- REPLACED: Use IncludeLaunchDescription for full_position.py ---
+    start_position_pipeline = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_pose_annotation, 'launch', 'full_position.py')
+        )
     )
+
     transform_node = Node(
         package='pose_annotation',
         executable='transform',
@@ -80,10 +84,11 @@ def generate_launch_description():
 
     # --- Create the Sequential Chain of Events ---
 
-    # 1. After gates_publisher_node starts, launch transform_node
-    on_gates_pub_start = RegisterEventHandler(
+    # --- CHANGED: Wait for the aggregator node from the included launch file ---
+    # 1. After position_aggregator_node starts, launch transform_node
+    on_aggregator_start = RegisterEventHandler(
         event_handler=OnProcessStart(
-            target_action=gates_publisher_node,
+            target_action_name='position_aggregator_node',
             on_start=[transform_node]
         )
     )
@@ -116,11 +121,11 @@ def generate_launch_description():
     ld.add_action(start_nav2_stack)
     ld.add_action(start_foxglove_bridge)
 
-    # Add the first custom node to start the chain
-    ld.add_action(gates_publisher_node)
+    # --- CHANGED: Add the included launch file to start the chain ---
+    ld.add_action(start_position_pipeline)
     
     # Add the event handlers that create the sequential pipeline
-    ld.add_action(on_gates_pub_start)
+    ld.add_action(on_aggregator_start)
     ld.add_action(on_transform_start)
     ld.add_action(on_image_pub_start)
 

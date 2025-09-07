@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
+from rclpy.duration import Duration
+from rclpy.time import Time
+
 from tf2_ros import TransformBroadcaster, Buffer, TransformListener
-from geometry_msgs.msg import TransformStamped
-from my_bridge.msg import Pose2Darray
+import tf2_geometry_msgs
+from geometry_msgs.msg import TransformStamped, PointStamped
+from std_msgs.msg import Float64MultiArray # <-- CHANGED: Import standard message
 from tf_transformations import quaternion_from_euler
-import numpy as np
 
 class GatesRobotsToMap(Node):
     def __init__(self):
@@ -17,80 +20,88 @@ class GatesRobotsToMap(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.tf_broadcaster = TransformBroadcaster(self)
 
-        # Subscriber to your custom topic
+        # --- Subscriber (MODIFIED) ---
+        # Subscribes to the output of your 'position.py' node
         self.subscription = self.create_subscription(
-            Pose2Darray,
-            '/gates_positions',
+            Float64MultiArray,          # <-- CHANGED: Use the standard message type
+            '/world_positions',         # <-- CHANGED: Use the correct topic name
             self.positions_callback,
             10
         )
+        self.get_logger().info("Node initialized. Waiting for data on /world_positions.")
 
-    def positions_callback(self, msg: Pose2Darray):
-        try:
-            # Wait for the transform from base_link to map (up to 1 second)
-            map_to_base_tf = self.tf_buffer.lookup_transform(
-                'map',
-                'base_link',
-                rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=15.0)
-            )
-        except Exception as e:
-            self.get_logger().warn(f'base_link frame not yet available. Skipping this message. {e}')
+
+    def positions_callback(self, msg: Float64MultiArray):
+        # We expect 14 models (10 gates, 4 robots), each with X and Y coordinates.
+        if len(msg.data) < 28:
+            self.get_logger().warn(f"Received message with {len(msg.data)} data points, expected 28. Skipping.")
             return
 
-        # Transform gates (indices 0-9)
-        for i in range(0, 10):
-            self.publish_transformed_pose(
-                msg.gates_and_robots[i].x,
-                msg.gates_and_robots[i].y,
-                f"gate_{i+1}",
-                map_to_base_tf
+        try:
+            # Get the transform from the robot's perspective ('base_link') to the 'map' frame
+            base_to_map_tf = self.tf_buffer.lookup_transform(
+                'map',          # Target frame
+                'base_link',    # Source frame
+                Time(),
+                timeout=Duration(seconds=2.0)
             )
+        except Exception as e:
+            self.get_logger().warn(f"Could not get 'base_link'->'map' transform. Is navigation running? Error: {e}")
+            return
 
-        # Transform robots (indices 10-13)
-        for i in range(10, 14):
-            self.publish_transformed_pose(
-                msg.gates_and_robots[i].x,
-                msg.gates_and_robots[i].y,
-                f"robot_{i-9}",
-                map_to_base_tf
-            )
+        # Extract base_link's position (robot 1, at index 10) from the flat array.
+        # Its X is at index 10*2=20, and its Y is at 10*2+1=21.
+        base_link_in_world_x = msg.data[20]
+        base_link_in_world_y = msg.data[21]
+        
+        # --- Process and transform all 14 models ---
+        for i in range(14):
+            # Define the name for the child frame
+            if i < 10:
+                name = f"gate_{i+1}"
+            else: # i is 10, 11, 12, 13
+                # Robot 1 (i=10) is our reference 'base_link', so we don't need to rebroadcast its position.
+                if i == 10: 
+                    continue
+                name = f"robot_{i-9}" # robot_2, robot_3, robot_4
 
-    def publish_transformed_pose(self, x, y, name, map_to_base_tf: TransformStamped):
-        # Compose point in base_link frame
-        point_base = np.array([x, y, 0.0])
+            # Extract the current model's world coordinates from the flat array
+            world_x = msg.data[i * 2]
+            world_y = msg.data[i * 2 + 1]
 
-        # Convert quaternion to rotation matrix
-        q = map_to_base_tf.transform.rotation
-        t = map_to_base_tf.transform.translation
-        rot_matrix = self.quaternion_to_rot_matrix(q)
-        trans_vec = np.array([t.x, t.y, t.z])
+            # STEP 1: Calculate the model's position relative to base_link's position in the world.
+            x_rel_to_base = world_x - base_link_in_world_x
+            y_rel_to_base = world_y - base_link_in_world_y
 
-        # Transform point from base_link -> map
-        point_map = rot_matrix.dot(point_base) + trans_vec
+            # STEP 2: Create a PointStamped message. This tells tf2 that these coordinates are in the 'base_link' frame.
+            point_in_base_link = PointStamped()
+            point_in_base_link.header.frame_id = "base_link"
+            point_in_base_link.point.x = x_rel_to_base
+            point_in_base_link.point.y = y_rel_to_base
+            point_in_base_link.point.z = 0.0 # Assuming a 2D plane
 
-        # Publish as a static transform
-        t_msg = TransformStamped()
-        t_msg.header.stamp = self.get_clock().now().to_msg()
-        t_msg.header.frame_id = 'map'
-        t_msg.child_frame_id = name
-        t_msg.transform.translation.x = float(point_map[0])
-        t_msg.transform.translation.y = float(point_map[1])
-        t_msg.transform.translation.z = 0.0
+            # STEP 3: Use tf2_geometry_msgs to perform the transformation to the 'map' frame.
+            point_in_map = tf2_geometry_msgs.do_transform_point(point_in_base_link, base_to_map_tf)
 
-        # Set rotation to zero since you don't have orientation
-        qx, qy, qz, qw = quaternion_from_euler(0.0, 0.0, 0.0)
-        t_msg.transform.rotation.x = qx
-        t_msg.transform.rotation.y = qy
-        t_msg.transform.rotation.z = qz
-        t_msg.transform.rotation.w = qw
+            # STEP 4: Publish the resulting point as a new TF transform.
+            t_msg = TransformStamped()
+            t_msg.header.stamp = self.get_clock().now().to_msg()
+            t_msg.header.frame_id = 'map'
+            t_msg.child_frame_id = name
+            
+            # The transformed point gives us the translation
+            t_msg.transform.translation.x = point_in_map.point.x
+            t_msg.transform.translation.y = point_in_map.point.y
+            t_msg.transform.translation.z = point_in_map.point.z
 
-        self.tf_broadcaster.sendTransform(t_msg)
+            # Since we only have position data, we publish a neutral orientation (no rotation).
+            q = quaternion_from_euler(0.0, 0.0, 0.0)
+            t_msg.transform.rotation.x = q[0]
+            t_msg.transform.rotation.y = q[1]
+            t_msg.transform.rotation.z = q[2]
+            t_msg.transform.rotation.w = q[3]
 
-    def quaternion_to_rot_matrix(self, q):
-        from tf_transformations import quaternion_matrix
-        quat = [q.x, q.y, q.z, q.w]
-        return quaternion_matrix(quat)[:3, :3]
+            self.tf_broadcaster.sendTransform(t_msg)
 
 def main(args=None):
     rclpy.init(args=args)

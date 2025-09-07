@@ -8,10 +8,7 @@ from tf2_ros import Buffer, TransformListener
 import tf2_geometry_msgs
 from geometry_msgs.msg import PointStamped, PoseArray, Pose
 from visualization_msgs.msg import Marker, MarkerArray
-from std_msgs.msg import ColorRGBA
-
-# Assuming your custom message is in a package named 'my_bridge'
-from my_bridge.msg import Pose2Darray
+from std_msgs.msg import ColorRGBA, Float64MultiArray  # <-- CHANGED: Import Float64MultiArray
 
 class ManualWorldToMapConverter(Node):
     """
@@ -29,10 +26,11 @@ class ManualWorldToMapConverter(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        # --- Subscriber ---
+        # --- Subscriber (MODIFIED) ---
+        # Subscribes to the output of your 'position.py' node
         self.positions_sub = self.create_subscription(
-            Pose2Darray,
-            '/gates_positions',
+            Float64MultiArray,          # <-- CHANGED: Use the standard message type
+            '/world_positions',         # <-- CHANGED: Use the correct topic name
             self.positions_callback,
             10
         )
@@ -41,11 +39,12 @@ class ManualWorldToMapConverter(Node):
         self.marker_pub = self.create_publisher(MarkerArray, '/visualization_markers', 10)
         self.pose_array_pub = self.create_publisher(PoseArray, '/map_frame_poses', 10)
 
-        self.get_logger().info("Node initialized. Waiting for data.")
+        self.get_logger().info("Node initialized. Waiting for data on /world_positions.")
 
-    def positions_callback(self, msg: Pose2Darray):
-        if len(msg.gates_and_robots) < 14:
-            self.get_logger().warn("Received message with fewer than 14 points. Skipping.")
+    def positions_callback(self, msg: Float64MultiArray):
+        # There are 14 models, each with an X and a Y, so we expect 28 data points.
+        if len(msg.data) < 28:
+            self.get_logger().warn(f"Received message with {len(msg.data)} data points, expected 28. Skipping.")
             return
 
         # --- Get the base_link -> map transform from TF ---
@@ -60,9 +59,11 @@ class ManualWorldToMapConverter(Node):
             self.get_logger().error(f"Could not get 'base_link'->'map' transform. Is navigation running? Error: {e}")
             return
 
-        # --- Extract base_link's position in the 'world' frame ---
-        base_link_in_world_x = msg.gates_and_robots[10].x
-        base_link_in_world_y = msg.gates_and_robots[10].y
+        # --- Extract base_link's position (robot 1, at index 10) from the flat array ---
+        # Index 10 corresponds to the 11th model in the list.
+        # Its X is at 10*2=20, and its Y is at 10*2+1=21.
+        base_link_in_world_x = msg.data[20]
+        base_link_in_world_y = msg.data[21]
         self.get_logger().info(f"Base_link is at (x={base_link_in_world_x:.3f}, y={base_link_in_world_y:.3f}) in 'world' frame.")
 
         marker_array = MarkerArray()
@@ -71,11 +72,15 @@ class ManualWorldToMapConverter(Node):
         pose_array.header.frame_id = "map"
         marker_id = 0
 
-        # --- Process every point ---
-        for i, pos_in_world in enumerate(msg.gates_and_robots):
+        # --- Process every point (14 models total) ---
+        for i in range(14):
+            # Extract the X and Y for the current model from the flat array
+            world_x = msg.data[i * 2]
+            world_y = msg.data[i * 2 + 1]
+
             # STEP 1: Manually transform from 'world' to 'base_link' frame
-            x_rel_to_base = pos_in_world.x - base_link_in_world_x
-            y_rel_to_base = pos_in_world.y - base_link_in_world_y
+            x_rel_to_base = world_x - base_link_in_world_x
+            y_rel_to_base = world_y - base_link_in_world_y
 
             point_in_base_link = PointStamped()
             point_in_base_link.header.frame_id = "base_link"
@@ -107,7 +112,6 @@ class ManualWorldToMapConverter(Node):
                 marker.action = Marker.ADD
                 marker.pose.position = point_in_map.point
                 marker.pose.orientation.w = 1.0
-                # --- Scale increased for larger cubes ---
                 marker.scale.x = 0.7
                 marker.scale.y = 0.7
                 marker.scale.z = 0.8

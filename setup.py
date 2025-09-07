@@ -27,7 +27,8 @@ setup(
             'pose_annotation_node = pose_annotation.pose_annotation_node:main',
             'transform = pose_annotation.transform:main',
             'lidar_3d = pose_annotation.lidar_3d:main',
-            'label = pose_annotation.label:main'
+            'label = pose_annotation.label:main',
+            'position = pose_annotation.position:main',
         ],
     },
 )

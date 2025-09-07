@@ -21,6 +21,8 @@ def generate_launch_description():
     pkg_nav2_bringup = get_package_share_directory('nav2_bringup')
     pkg_turtlebot3_navigation2 = get_package_share_directory('turtlebot3_navigation2')
     pkg_foxglove_bridge = get_package_share_directory('foxglove_bridge')
+    # --- CHANGED: No longer need gates_position_publisher package ---
+    # pkg_gates_position_publisher = get_package_share_directory('gates_position_publisher')
 
     # --- Environment Variable ---
     set_turtlebot_model = SetEnvironmentVariable(
@@ -54,18 +56,23 @@ def generate_launch_description():
     )
 
     # --- Define Actions for the Sequential Custom Pipeline ---
-    gates_publisher_node = Node(
-        package='gates_position_publisher',
-        executable='gates_position_node',
-        name='gates_position_node',
-        output='screen'
+
+    # --- REPLACED: Use IncludeLaunchDescription for full_position.py ---
+    start_position_pipeline = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_pose_annotation, 'launch', 'full_position.py')
+        )
     )
+    
+    # This is the node that will be started by the event handler
     pose_annotation_node = Node(
         package='pose_annotation',
         executable='label',
         name='pose_annotation_label',
         output='screen'
     )
+    
+    # This is the final launch file in the sequence
     lidar_fusion_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_pose_annotation, 'launch', 'lidar_launch.py')
@@ -74,15 +81,19 @@ def generate_launch_description():
 
     # --- Create the Sequential Chain of Events ---
 
-    # 1. When gates_publisher_node starts, trigger pose_annotation_node.
-    on_gates_pub_start = RegisterEventHandler(
+    # --- CHANGED: The event handler now waits for a node from WITHIN full_position.py ---
+    # We assume 'full_position.py' starts a node named 'position_aggregator_node'.
+    # This node must start before 'pose_annotation_node' (the labeler) can run.
+    on_aggregator_start = RegisterEventHandler(
         event_handler=OnProcessStart(
-            target_action=gates_publisher_node,
+            # This needs to be the specific name of the node from the included launch file.
+            target_action_name='position_aggregator_node',
             on_start=[pose_annotation_node]
         )
     )
 
     # 2. When pose_annotation_node starts, trigger the final lidar_fusion_launch.
+    # This part remains the same.
     on_pose_annotation_start = RegisterEventHandler(
         event_handler=OnProcessStart(
             target_action=pose_annotation_node,
@@ -96,17 +107,17 @@ def generate_launch_description():
     # Add environment variable
     ld.add_action(set_turtlebot_model)
 
-    # Add the base simulation components
+    # Add the base simulation components (start in parallel)
     ld.add_action(start_gazebo_sim)
     ld.add_action(start_slam_toolbox)
     ld.add_action(start_nav2_stack)
     ld.add_action(start_foxglove_bridge)
 
-    # Add the first custom node to start the chain
-    ld.add_action(gates_publisher_node)
+    # --- CHANGED: Add the included launch file to start the custom pipeline ---
+    ld.add_action(start_position_pipeline)
 
     # Add the event handlers that will continue the chain
-    ld.add_action(on_gates_pub_start)
+    ld.add_action(on_aggregator_start)
     ld.add_action(on_pose_annotation_start)
 
     return ld
