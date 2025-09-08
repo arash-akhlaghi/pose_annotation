@@ -1,7 +1,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable, RegisterEventHandler
+from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable, RegisterEventHandler, GroupAction
 from launch.event_handlers import OnProcessStart
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_xml.launch_description_sources import XMLLaunchDescriptionSource
@@ -10,18 +10,18 @@ from launch_ros.actions import Node
 def generate_launch_description():
     """
     Launches the entire simulation and processing pipeline.
-    The base simulation starts in parallel.
-    The custom nodes are launched in a specific, sequential order.
+    - Base simulation runs in parallel.
+    - Custom data processing pipeline runs sequentially.
     """
 
-    # --- Paths to other ROS packages ---
-    # --- ADDED: Path to your pose_annotation package ---
+    # --- Paths to ROS packages ---
     pkg_pose_annotation = get_package_share_directory('pose_annotation')
     pkg_turtlebot3_gazebo = get_package_share_directory('turtlebot3_gazebo')
     pkg_slam_toolbox = get_package_share_directory('slam_toolbox')
     pkg_nav2_bringup = get_package_share_directory('nav2_bringup')
     pkg_turtlebot3_navigation2 = get_package_share_directory('turtlebot3_navigation2')
     pkg_foxglove_bridge = get_package_share_directory('foxglove_bridge')
+    pkg_ros_gz_bridge = get_package_share_directory('ros_gz_bridge')
 
     # --- Environment Variable ---
     set_turtlebot_model = SetEnvironmentVariable(
@@ -54,15 +54,33 @@ def generate_launch_description():
         )
     )
 
-    # --- Define Actions for the Sequential Custom Pipeline ---
+    # --- Define Actions for the Custom Pipeline ---
 
-    # --- REPLACED: Use IncludeLaunchDescription for full_position.py ---
-    start_position_pipeline = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_pose_annotation, 'launch', 'full_position.py')
-        )
+    # --- Logic for starting the position aggregation pipeline ---
+    models_to_bridge = ["burger", "robot_2", "robot_3", "robot_4"] + [f"gate{i}" for i in range(1, 11)]
+    
+    bridge_group = GroupAction(
+        actions=[
+            Node(
+                package='ros_gz_bridge',
+                executable='parameter_bridge',
+                arguments=[f'/model/{model_name}/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry'],
+                output='screen',
+                # Give each bridge a unique name to avoid conflicts
+                name=f'odometry_bridge_{model_name}'
+            ) for model_name in models_to_bridge
+        ]
+    )
+    
+    # --- THIS IS THE CORRECTED NODE DEFINITION ---
+    position_aggregator_node = Node(
+        package='pose_annotation',        # CORRECT package name
+        executable='position',            # CORRECT executable from setup.py
+        name='position_aggregator_node',  # This is the runtime name, it's good
+        output='screen'
     )
 
+    # --- NODES FOR THE SEQUENTIAL PART ---
     transform_node = Node(
         package='pose_annotation',
         executable='transform',
@@ -84,11 +102,10 @@ def generate_launch_description():
 
     # --- Create the Sequential Chain of Events ---
 
-    # --- CHANGED: Wait for the aggregator node from the included launch file ---
     # 1. After position_aggregator_node starts, launch transform_node
     on_aggregator_start = RegisterEventHandler(
         event_handler=OnProcessStart(
-            target_action_name='position_aggregator_node',
+            target_action=position_aggregator_node,
             on_start=[transform_node]
         )
     )
@@ -115,16 +132,17 @@ def generate_launch_description():
     # Add environment variable
     ld.add_action(set_turtlebot_model)
 
-    # Add the parallel group (base simulation)
+    # Add the parallel simulation actions
     ld.add_action(start_gazebo_sim)
     ld.add_action(start_slam_toolbox)
     ld.add_action(start_nav2_stack)
     ld.add_action(start_foxglove_bridge)
 
-    # --- CHANGED: Add the included launch file to start the chain ---
-    ld.add_action(start_position_pipeline)
+    # Add the first step of the custom pipeline (bridges and aggregator)
+    ld.add_action(bridge_group)
+    ld.add_action(position_aggregator_node)
     
-    # Add the event handlers that create the sequential pipeline
+    # Add the event handlers that create the sequential chain
     ld.add_action(on_aggregator_start)
     ld.add_action(on_transform_start)
     ld.add_action(on_image_pub_start)
