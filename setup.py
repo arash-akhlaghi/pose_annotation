@@ -29,6 +29,7 @@ setup(
             'lidar_3d = pose_annotation.lidar_3d:main',
             'label = pose_annotation.label:main',
             'position = pose_annotation.position:main',
+            'polygon = pose_annotation.polygon:main',
         ],
     },
 )

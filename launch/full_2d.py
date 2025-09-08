@@ -1,7 +1,10 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable, RegisterEventHandler, GroupAction
+from launch.actions import (
+    IncludeLaunchDescription, SetEnvironmentVariable, RegisterEventHandler,
+    GroupAction, ExecuteProcess
+)
 from launch.event_handlers import OnProcessStart
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_xml.launch_description_sources import XMLLaunchDescriptionSource
@@ -12,6 +15,7 @@ def generate_launch_description():
     Launches the entire simulation and processing pipeline.
     - Base simulation runs in parallel.
     - Custom data processing pipeline runs sequentially.
+    - Polygon drawing and Foxglove Studio are launched at the end.
     """
 
     # --- Paths to ROS packages ---
@@ -55,96 +59,63 @@ def generate_launch_description():
     )
 
     # --- Define Actions for the Custom Pipeline ---
-
-    # --- Logic for starting the position aggregation pipeline ---
     models_to_bridge = ["burger", "robot_2", "robot_3", "robot_4"] + [f"gate{i}" for i in range(1, 11)]
-    
     bridge_group = GroupAction(
         actions=[
             Node(
-                package='ros_gz_bridge',
-                executable='parameter_bridge',
+                package='ros_gz_bridge', executable='parameter_bridge',
                 arguments=[f'/model/{model_name}/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry'],
-                output='screen',
-                # Give each bridge a unique name to avoid conflicts
-                name=f'odometry_bridge_{model_name}'
+                output='screen', name=f'odometry_bridge_{model_name}'
             ) for model_name in models_to_bridge
         ]
     )
     
-    # --- THIS IS THE CORRECTED NODE DEFINITION ---
-    position_aggregator_node = Node(
-        package='pose_annotation',        # CORRECT package name
-        executable='position',            # CORRECT executable from setup.py
-        name='position_aggregator_node',  # This is the runtime name, it's good
-        output='screen'
-    )
+    position_aggregator_node = Node(package='pose_annotation', executable='position', name='position_aggregator_node', output='screen')
+    transform_node = Node(package='pose_annotation', executable='transform', name='gates_robots_to_map', output='screen')
+    image_publisher_node = Node(package='pose_annotation', executable='image_publisher', name='map_image_publisher', output='screen')
+    pose_annotation_node = Node(package='pose_annotation', executable='pose_annotation_node', name='pose_annotation_node', output='screen')
 
-    # --- NODES FOR THE SEQUENTIAL PART ---
-    transform_node = Node(
+    # --- NEW: Define the polygon node and Foxglove action ---
+    polygon_node = Node(
         package='pose_annotation',
-        executable='transform',
-        name='gates_robots_to_map',
+        executable='polygon',
+        name='polygon_node',
         output='screen'
     )
-    image_publisher_node = Node(
-        package='pose_annotation',
-        executable='image_publisher',
-        name='map_image_publisher',
-        output='screen'
-    )
-    pose_annotation_node = Node(
-        package='pose_annotation',
-        executable='pose_annotation_node',
-        name='pose_annotation_node',
-        output='screen'
+    open_foxglove_action = ExecuteProcess(
+        cmd=['xdg-open', 'https://app.foxglove.dev'],
+        shell=True
     )
 
     # --- Create the Sequential Chain of Events ---
+    on_aggregator_start = RegisterEventHandler(OnProcessStart(target_action=position_aggregator_node, on_start=[transform_node]))
+    on_transform_start = RegisterEventHandler(OnProcessStart(target_action=transform_node, on_start=[image_publisher_node]))
+    on_image_pub_start = RegisterEventHandler(OnProcessStart(target_action=image_publisher_node, on_start=[pose_annotation_node]))
 
-    # 1. After position_aggregator_node starts, launch transform_node
-    on_aggregator_start = RegisterEventHandler(
+    # --- NEW: Event 4. After pose_annotation_node starts, launch the polygon drawer and open Foxglove ---
+    on_pose_annotation_start = RegisterEventHandler(
         event_handler=OnProcessStart(
-            target_action=position_aggregator_node,
-            on_start=[transform_node]
-        )
-    )
-
-    # 2. After transform_node starts, launch image_publisher_node
-    on_transform_start = RegisterEventHandler(
-        event_handler=OnProcessStart(
-            target_action=transform_node,
-            on_start=[image_publisher_node]
-        )
-    )
-
-    # 3. After image_publisher_node starts, launch the final pose_annotation_node
-    on_image_pub_start = RegisterEventHandler(
-        event_handler=OnProcessStart(
-            target_action=image_publisher_node,
-            on_start=[pose_annotation_node]
+            target_action=pose_annotation_node,
+            on_start=[
+                polygon_node,
+                open_foxglove_action
+            ]
         )
     )
 
     # --- Assemble the Final Launch Description ---
     ld = LaunchDescription()
-
-    # Add environment variable
     ld.add_action(set_turtlebot_model)
-
-    # Add the parallel simulation actions
     ld.add_action(start_gazebo_sim)
     ld.add_action(start_slam_toolbox)
     ld.add_action(start_nav2_stack)
     ld.add_action(start_foxglove_bridge)
-
-    # Add the first step of the custom pipeline (bridges and aggregator)
     ld.add_action(bridge_group)
     ld.add_action(position_aggregator_node)
-    
-    # Add the event handlers that create the sequential chain
     ld.add_action(on_aggregator_start)
     ld.add_action(on_transform_start)
     ld.add_action(on_image_pub_start)
+    # --- NEW: Add the final event handler to the launch description ---
+    ld.add_action(on_pose_annotation_start)
 
     return ld
