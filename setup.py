@@ -12,7 +12,12 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
+        
+        # This single line finds and installs all Python launch files
+        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.py'))),
+        
+        # This line finds the 'maps' directory and installs all its contents
+        (os.path.join('share', package_name, 'maps'), glob(os.path.join('maps', '*'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
