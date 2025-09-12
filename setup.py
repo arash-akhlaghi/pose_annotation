@@ -35,6 +35,8 @@ setup(
             'label = pose_annotation.label:main',
             'position = pose_annotation.position:main',
             'polygon = pose_annotation.polygon:main',
+            'filter_info_publisher = pose_annotation.filter_info_publisher:main',
+            'polygon_to_occupancy_grid = pose_annotation.polygon_to_occupancy_grid:main',
         ],
     },
 )
