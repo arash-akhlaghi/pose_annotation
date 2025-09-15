@@ -47,18 +47,25 @@ def generate_launch_description():
         launch_arguments={'use_sim_time': 'true'}.items()
     )
 
-    # --- NEW: use your custom nav2 params ---
-    nav2_params_file = os.path.join(
-        "/home/neo/ros2_ws/src/pose_annotation/params",
-        "nav2_custom_params.yaml"
-    )
+    # --- NEW: use your custom nav2 params (portable) ---
+    # Prefer package-local custom file; fall back to nav2_bringup defaults if missing.
+    nav2_candidate = os.path.join(pkg_pose_annotation, 'params', 'nav2_custom_params.yaml')
+    if os.path.exists(nav2_candidate):
+        nav2_params_file = nav2_candidate
+    else:
+        # warn the user and fall back to default nav2 params packaged with nav2_bringup
+        nav2_params_file = os.path.join(pkg_nav2_bringup, 'params', 'nav2_params.yaml')
+        # LogInfo will be added to the LaunchDescription below to inform user at launch time
+        fallback_msg = f"[WARN] nav2_custom_params.yaml not found in {os.path.join(pkg_pose_annotation, 'params')}; using default nav2 params at {nav2_params_file}."
+
     start_nav2_stack = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_nav2_bringup, 'launch', 'navigation_launch.py')
         ),
         launch_arguments={
             'params_file': nav2_params_file,
-            'use_sim_time': 'true'
+            'use_sim_time': 'true',
+            'enable_docking': 'false'
         }.items()
     )
 
@@ -181,6 +188,9 @@ def generate_launch_description():
     ld.add_action(set_turtlebot_model)
     ld.add_action(start_gazebo_sim)
     ld.add_action(start_slam_toolbox)
+    # if we chose fallback, add a LogInfo so the user sees the warning
+    if 'fallback_msg' in locals():
+        ld.add_action(LogInfo(msg=fallback_msg))
     ld.add_action(start_nav2_stack)
     ld.add_action(start_foxglove_bridge)
     ld.add_action(bridge_group)
