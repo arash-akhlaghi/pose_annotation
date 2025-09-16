@@ -2,30 +2,44 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>pose_annotation</name>
-  <version>0.0.0</version>
-  <description>Package for gate and robot position transformation and annotation.</description>
-  <maintainer email="arash.akhlaghi.d@gmail.com">neo</maintainer>
-  <license>TODO: License declaration</license>
+  <version>0.1.0</version>
+  <description>
+    Package for gate and robot position transformation, annotation, and visualization.
+  </description>
 
+  <maintainer email="arash.akhlaghi.d@gmail.com">neo</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- Build system -->
   <buildtool_depend>ament_python</buildtool_depend>
 
-  <!-- Core ROS2 dependencies -->
+  <!-- Core ROS 2 dependencies -->
   <depend>rclpy</depend>
   <depend>nav_msgs</depend>
   <depend>sensor_msgs</depend>
-  <depend>cv_bridge</depend>
+  <depend>geometry_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_geometry_msgs</depend>
+  <depend>cv_bridge</depend>
+
+  <!-- Navigation and SLAM dependencies -->
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_core</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+
+  <!-- Visualization / bridge -->
+  <exec_depend>foxglove_bridge</exec_depend>
+
+  <!-- Extra Python libraries -->
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
 
   <!-- Test dependencies -->
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
-
-  <!-- Extra python libs -->
-  <exec_depend>python3-opencv</exec_depend>
-  <exec_depend>python3-numpy</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>
