@@ -13,11 +13,14 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         
-        # This single line finds and installs all Python launch files
+        # Install all Python launch files
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.py'))),
         
-        # This line finds the 'maps' directory and installs all its contents
+        # Install all map files
         (os.path.join('share', package_name, 'maps'), glob(os.path.join('maps', '*'))),
+        
+        # Install all parameter files
+        (os.path.join('share', package_name, 'params'), glob(os.path.join('params', '*'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

@@ -10,7 +10,6 @@ from launch.event_handlers import OnProcessStart
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
-
 def generate_launch_description():
     """
     Launches the entire simulation and processing pipeline.
@@ -46,12 +45,14 @@ def generate_launch_description():
     )
 
     nav2_candidate = os.path.join(pkg_pose_annotation, 'params', 'nav2_custom_params.yaml')
+    print("Looking for Nav2 params at:", nav2_candidate)
+    print("Exists?", os.path.exists(nav2_candidate))
     if os.path.exists(nav2_candidate):
         nav2_params_file = nav2_candidate
     else:
         nav2_params_file = os.path.join(pkg_nav2_bringup, 'params', 'nav2_params.yaml')
         fallback_msg = f"[WARN] nav2_custom_params.yaml not found in {os.path.join(pkg_pose_annotation, 'params')}; using default nav2 params at {nav2_params_file}."
-
+        
     start_nav2_stack = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_nav2_bringup, 'launch', 'navigation_launch.py')
@@ -63,14 +64,13 @@ def generate_launch_description():
         }.items()
     )
 
-    # --- THIS SECTION IS THE FIX ---
-    # Start the Foxglove bridge directly on the new port 8766 to avoid conflict.
+    # --- Foxglove Bridge on port 8765 ---
     start_foxglove_bridge = Node(
         package='foxglove_bridge',
         executable='foxglove_bridge',
         name='foxglove_bridge',
         parameters=[{
-            'port': 8766,
+            'port': 8765,
             'use_sim_time': True
         }]
     )
